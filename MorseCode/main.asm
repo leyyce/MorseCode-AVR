@@ -16,11 +16,11 @@
 .equ CLK_FREQUENCY_IN_HZ = 16000000
 
 ; Define timing constants (in milliseconds)
-.equ DOT_TIME = 100  ; Duration of a dot
-.equ DASH_TIME = 300 ; Duration of a dash
-.equ CHAR_SPACE = 100 ; Space between parts of the same letter
-.equ LETTER_SPACE = 300 ; Space between letters
-.equ WORD_SPACE = 700 ; Space between words
+.equ DOT_TIME = 200  ; Duration of a dot
+.equ DASH_TIME = 3 * DOT_TIME ; Duration of a dash
+.equ CHAR_SPACE = DOT_TIME ; Space between parts of the same letter
+.equ LETTER_SPACE = DASH_TIME ; Space between letters
+.equ WORD_SPACE = 7 * DOT_TIME ; Space between words
 
 ; Define amount of clock cycles to yield the desired wait times
 .equ DOT_CYCLES = (DOT_TIME / 1000.) / (1. / clk_frequency_in_Hz) / 11
@@ -104,6 +104,16 @@ start:
 
 	; Main loop
 	main_loop:
+	cpi CHAR, 32 ; Check if char is space
+	brne handle_char
+	
+	; Case char is space
+	space_word
+	load_next_char_and_test
+	rjmp main_loop
+
+	; Case char is a normal character
+	handle_char:
 	rcall map_char_to_morse
 	rcall transmit_code
 	load_next_char_and_test
@@ -111,6 +121,10 @@ start:
 	rjmp main_loop
 	
 	end:
+	space_word
+	space_word
+	space_word
+	space_word
 	space_word
 	rjmp start
 
@@ -187,9 +201,10 @@ delay:
 	brne delay ; continue when cnt_high != 0 | 2 cycles
 	ret
 
-; String to be converted to Morse code
+; String to be converted to Morse code.
+; Should be all caps and only supports letters A-Z and spaces
 string:
-    .db "SOS", 0
+    .db "THIS IS A TEST MESSAGE", 0
 
 ; First element is the binary encoded sequence for the coresponding letter (starting at the leftmost bit)
 ;	0: Dot
