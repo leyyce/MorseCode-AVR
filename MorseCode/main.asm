@@ -5,8 +5,12 @@
 ; Author : Leya Wehner
 ;
 
-; Define the LED pin (assuming it's connected to port D)
-.equ LED_PIN = 2
+; Define the port register the transmitter is connected to
+.equ TRANSMITTER_PORT = PORTD
+; Defines the data direction register the transmitter is connected to
+.equ TRANSMITTER_DDR = DDRD
+; Define the pin the transmitter is connected to
+.equ TRANSMITTER_PIN = 2
 
 ; Clock frequency in Hz
 .equ CLK_FREQUENCY_IN_HZ = 16000000
@@ -18,118 +22,137 @@
 .equ LETTER_SPACE = 300 ; Space between letters
 .equ WORD_SPACE = 700 ; Space between words
 
-.equ DOT_CYCLES = 0.5 / (1000. / DOT_TIME) * 2 / (1. / clk_frequency_in_Hz) / 11
-.equ DASH_CYCLES = 0.5 / (1000. / DASH_TIME) * 2 / (1. / clk_frequency_in_Hz) / 11
-.equ CHAR_SPACE_CYCLES = 0.5 / (1000. / CHAR_SPACE) * 2 / (1. / clk_frequency_in_Hz) / 11
-.equ LETTER_SPACE_CYCLES = 0.5 / (1000. / LETTER_SPACE) * 2 / (1. / clk_frequency_in_Hz) / 11
-.equ WORD_SPACE_CYCLES = 0.5 / (1000. / WORD_SPACE) * 2 / (1. / clk_frequency_in_Hz) / 11
+; Define amount of clock cycles to yield the desired wait times
+.equ DOT_CYCLES = (DOT_TIME / 1000.) / (1. / clk_frequency_in_Hz) / 11
+.equ DASH_CYCLES = (DASH_TIME / 1000.) / (1. / clk_frequency_in_Hz) / 11
+.equ CHAR_SPACE_CYCLES = (CHAR_SPACE / 1000.) / (1. / clk_frequency_in_Hz) / 11
+.equ LETTER_SPACE_CYCLES = (LETTER_SPACE / 1000.) / (1. / clk_frequency_in_Hz) / 11
+.equ WORD_SPACE_CYCLES = (WORD_SPACE / 1000.) / (1. / clk_frequency_in_Hz) / 11
 
+; More meaningful names for registers
 .def CHAR = r16
 .def MORSE_CODE = r17
 .def CODE_LEN= r18
-.def TEMP = r19
-.def TEMP2 = r20
+.def BITMASK = r19
+.def TEMP = r20
 
 .def CNT_LOW = r21
 .def CNT_MID = r22
 .def CNT_HIGH = r23
 .def ZERO_CHECK = r24
 
+; Macro that loads the curently needed clock cycle count into the coresponding register
+; Params:
+;	@0: The amount of clock cycles to load 
 .macro load_cycles
 	ldi CNT_LOW, byte1(@0)
 	ldi CNT_MID, byte2(@0)
 	ldi CNT_HIGH, byte3(@0)
 .endmacro
 
-.macro wait_char
+; Macro to leave a space between parts of the same letter
+.macro space_char
 	load_cycles CHAR_SPACE_CYCLES
-	rcall delay_long
+	rcall delay
 .endmacro
 
-.macro wait_letter
+; Macro to leave a space between letters
+.macro space_letter
 	load_cycles LETTER_SPACE_CYCLES
-	rcall delay_long
+	rcall delay
 .endmacro
 
-.macro wait_word
+; Macro to leave a space between words
+.macro space_word
 	load_cycles WORD_SPACE_CYCLES
-	rcall delay_long
+	rcall delay
 .endmacro
 
-.macro blink_dot
+; Macro to transmit a dot
+.macro transmit_dot
 	load_cycles DOT_CYCLES
-	sbi PORTD, LED_PIN
-	rcall delay_long
-	cbi PORTD, LED_PIN
+	sbi TRANSMITTER_PORT, TRANSMITTER_PIN
+	rcall delay
+	cbi TRANSMITTER_PORT, TRANSMITTER_PIN
 .endmacro
 
-.macro blink_dash
+; Macro to transmit a dash
+.macro transmit_dash
 	load_cycles DASH_CYCLES
-	sbi PORTD, LED_PIN
-	rcall delay_long
-	cbi PORTD, LED_PIN
+	sbi TRANSMITTER_PORT, TRANSMITTER_PIN
+	rcall delay
+	cbi TRANSMITTER_PORT, TRANSMITTER_PIN
 .endmacro
 
-start:
+; Macro to load the next char into the CHAR register.
+; If CHAR is zero or negative branches to the end label
+.macro load_next_char_and_test
+	lpm CHAR, Z+ ; Load next char in CHAR register and post increment Z to yield the subsequent char on the next iteration
+	tst CHAR ; Test if CHAR is zero or negative...
+	breq end ; ...and if so end of string is reached and we branch accordingly
+.endmacro
+
+init:
 	; Configure LED pin as output
-	sbi DDRB, LED_PIN
-	
+	sbi TRANSMITTER_DDR, TRANSMITTER_PIN
+start:
 	; Load string address
 	ldi ZL, LOW(string << 1)
 	ldi ZH, HIGH(string << 1)
 	
+	load_next_char_and_test
+
 	; Main loop
 	main_loop:
-	lpm CHAR, Z+
-	tst CHAR
-	breq end ; End of string
-	
-	; Convert character to Morse code
 	rcall map_char_to_morse
-	
-	; Blink the LED according to Morse code
-	rcall blink_code
-	
-	wait_letter
-	
+	rcall transmit_code
+	load_next_char_and_test
+	space_letter
 	rjmp main_loop
 	
 	end:
-	rjmp end
+	space_word
+	rjmp start
 
-blink_code:
-	ldi TEMP, 0b10000000
+transmit_code:
+	ldi BITMASK, 0b10000000 ; Bit mask to check needed bit in MORSE_CODE register
 	
 	morse_loop:
-	mov TEMP2, MORSE_CODE
-	and TEMP2, TEMP
-	tst TEMP2
-	brne dash
+	mov TEMP, MORSE_CODE ; Copy MORSE_CODE in TEMP register
+	and TEMP, BITMASK ; Bitwise AND with BITMASK to look only at the needed bit 
+	tst TEMP ; Test if bit is zero
+	brne dash ; If bit is not zero we transmit a dash. If it is zero we transmit a dot
+
 	dot:
-	blink_dot
+	transmit_dot
 	rjmp skip_dash
+
 	dash:
-	blink_dash
+	transmit_dash
 	
 	skip_dash:
-	LSR TEMP
+	lsr BITMASK ; Shift BITMASK to the right to look at the next bit in the subsequent iteration
 
-	clr TEMP2
-	dec CODE_LEN
-	cpse CODE_LEN, TEMP2
-	wait_char
-	tst CODE_LEN
-	brne morse_loop
+	; Check if the next bit in the MORSE_CODE register is still part of the Morse code
+	dec CODE_LEN ; Decrement CODE_LEN
+	tst CODE_LEN ; Check CODE_LEN for zero
+	breq end_transmit ; Jump to end if all the bits that were part of the code are transmited
+
+	space_char
+	rjmp morse_loop
+
+	end_transmit:
 	ret
 
 map_char_to_morse:
+	; Save Z register to stack
 	push ZL
 	push ZH
 	
 	; Convert ASCII character to table index
 	; Assumes input is uppercase letter ('A' = 0, 'B' = 1, ...)
-	subi CHAR, 'A'  ; Convert ASCII to 0-based index
-	add CHAR, CHAR
+	subi CHAR, 'A' ; Convert ASCII to 0-based index
+	add CHAR, CHAR ; Offset by the doubled amount as each Morse table entry for a letter consists of two bytes of data
 	
 	; Load address of Morse code table
 	ldi ZL, LOW(morse_table << 1)
@@ -137,38 +160,41 @@ map_char_to_morse:
 	
 	; Fetch Morse code from table
 	clr TEMP
-	add r30, CHAR
-	adc r31, TEMP
+	add ZL, CHAR
+	adc ZH, TEMP
 	lpm MORSE_CODE, Z+  ; Load Morse code into MORSE_CODE register
 	lpm CODE_LEN, Z  ; Load code lengt into CODE_LEN register
 	
+	; Restore Z register from stack
 	pop ZH
 	pop ZL
 	
 	ret
 
-delay_long:
+delay:
 	; decrement counter :
 	clc ; clear carry | 1 cycle
-	sbci CNT_LOW, 1 ; subtract low byte | 1 cycle
+	subi CNT_LOW, 1 ; subtract low byte | 1 cycle
 	sbci CNT_MID, 0 ; subtract mid byte | 1 cycle
 	sbci CNT_HIGH, 0 ; subtract high byte | 1 cycle
 
-	; check if counter == 0
+	; check if counter == 0 in a constant amount of cycles
 	clr ZERO_CHECK ; 1 cycle
 	or ZERO_CHECK, CNT_LOW ; 1 cycle
 	or ZERO_CHECK, CNT_MID ; 1 cycle
 	or ZERO_CHECK, CNT_HIGH ; 1 cycle
 	tst ZERO_CHECK ; 1 cycle
-	brne delay_long ; continue when cnt_high != 0 | 2 cycles
+	brne delay ; continue when cnt_high != 0 | 2 cycles
 	ret
 
 ; String to be converted to Morse code
-.org 0x0100
 string:
-    .db "TESTSTRING", 0
+    .db "SOS", 0
 
-.org 0x0200
+; First element is the binary encoded sequence for the coresponding letter (starting at the leftmost bit)
+;	0: Dot
+;	1: Dash
+; The second element is the lenght of the morse code so that we can ignore unused trailing zero bits
 morse_table:
 	.db 0b01000000, 2 ; A:	.-
 	.db 0b10000000, 4 ; B:	-...
