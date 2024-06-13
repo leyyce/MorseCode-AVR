@@ -84,88 +84,99 @@
 	cbi TRANSMITTER_PORT, TRANSMITTER_PIN
 .endmacro
 
-; Macro to load the next char into the CHAR register.
-; If CHAR is zero or negative branches to the end label
-.macro load_next_char_and_test
-	lpm CHAR, Z+ ; Load next char in CHAR register and post increment Z to yield the subsequent char on the next iteration
-	tst CHAR ; Test if CHAR is zero or negative...
-	breq end ; ...and if so end of string is reached and we branch accordingly
+.macro init_uart
+	ldi TEMP, 207 ; 103 with TXEN0 unset
+	sts UBRR0L, TEMP
+	clr TEMP
+	sts UBRR0H, TEMP
+	lds TEMP, UCSR0A
+	ori TEMP, (1 << U2X0)
+	sts UCSR0A, TEMP
+	ldi TEMP, (1 << RXEN0) | (1 << TXEN0)
+	sts UCSR0B, TEMP
 .endmacro
 
 init:
+	init_uart
 	; Configure LED pin as output
 	sbi TRANSMITTER_DDR, TRANSMITTER_PIN
-start:
-	; Load string address
-	ldi ZL, LOW(string << 1)
-	ldi ZH, HIGH(string << 1)
-	
-	load_next_char_and_test
+main_loop:
+	lds TEMP, UCSR0A
+	andi TEMP, (1 << RXC0)
+	tst TEMP
+	breq main_loop
+	lds CHAR, UDR0
 
-	; Main loop
-	main_loop:
 	cpi CHAR, 32 ; Check if char is space
 	brne handle_char
 	
 	; Case char is space
 	space_word
-	load_next_char_and_test
 	rjmp main_loop
 
 	; Case char is a normal character
 	handle_char:
-	rcall map_char_to_morse
-	rcall transmit_code
-	load_next_char_and_test
-	space_letter
-	rjmp main_loop
-	
-	end:
-	space_word
-	space_word
-	space_word
-	space_word
-	space_word
-	rjmp start
+		rcall map_char_to_morse
+		rcall transmit_code
+		space_letter
+		rjmp main_loop
 
 transmit_code:
+	push TEMP
+	in TEMP, SREG
+	push TEMP
+	push BITMASK
+	push MORSE_CODE
+	push CODE_LEN
+
+
 	ldi BITMASK, 0b10000000 ; Bit mask to check needed bit in MORSE_CODE register
 	
 	morse_loop:
-	mov TEMP, MORSE_CODE ; Copy MORSE_CODE in TEMP register
-	and TEMP, BITMASK ; Bitwise AND with BITMASK to look only at the needed bit 
-	tst TEMP ; Test if bit is zero
-	brne dash ; If bit is not zero we transmit a dash. If it is zero we transmit a dot
+		mov TEMP, MORSE_CODE ; Copy MORSE_CODE in TEMP register
+		and TEMP, BITMASK ; Bitwise AND with BITMASK to look only at the needed bit 
+		tst TEMP ; Test if bit is zero
+		brne dash ; If bit is not zero we transmit a dash. If it is zero we transmit a dot
 
 	dot:
-	transmit_dot
-	rjmp skip_dash
+		transmit_dot
+		rjmp skip_dash
 
 	dash:
-	transmit_dash
+		transmit_dash
 	
 	skip_dash:
-	lsr BITMASK ; Shift BITMASK to the right to look at the next bit in the subsequent iteration
+		lsr BITMASK ; Shift BITMASK to the right to look at the next bit in the subsequent iteration
 
-	; Check if the next bit in the MORSE_CODE register is still part of the Morse code
-	dec CODE_LEN ; Decrement CODE_LEN
-	tst CODE_LEN ; Check CODE_LEN for zero
-	breq end_transmit ; Jump to end if all the bits that were part of the code are transmited
+		; Check if the next bit in the MORSE_CODE register is still part of the Morse code
+		dec CODE_LEN ; Decrement CODE_LEN
+		tst CODE_LEN ; Check CODE_LEN for zero
+		breq end_transmit ; Jump to end if all the bits that were part of the code are transmited
 
-	space_char
-	rjmp morse_loop
+		space_char
+		rjmp morse_loop
 
 	end_transmit:
-	ret
+		pop CODE_LEN
+		pop MORSE_CODE
+		pop BITMASK
+		pop TEMP
+		out SREG, TEMP
+		pop TEMP
+		ret
 
 map_char_to_morse:
 	; Save Z register to stack
 	push ZL
 	push ZH
+	push TEMP
+	in TEMP, SREG
+	push TEMP
+	push CHAR
 	
 	; Convert ASCII character to table index
-	; Assumes input is uppercase letter ('A' = 0, 'B' = 1, ...)
-	subi CHAR, 'A' ; Convert ASCII to 0-based index
+	; Assumes input is lowercase letter ('a' = 0, 'b' = 1, ...)
+	subi CHAR, 'a' ; Convert ASCII to 0-based index
 	add CHAR, CHAR ; Offset by the doubled amount as each Morse table entry for a letter consists of two bytes of data
 	
 	; Load address of Morse code table
@@ -180,6 +191,10 @@ map_char_to_morse:
 	lpm CODE_LEN, Z  ; Load code lengt into CODE_LEN register
 	
 	; Restore Z register from stack
+	pop CHAR
+	pop TEMP
+	out SREG, TEMP
+	pop TEMP
 	pop ZH
 	pop ZL
 	
@@ -200,11 +215,6 @@ delay:
 	tst ZERO_CHECK ; 1 cycle
 	brne delay ; continue when cnt_high != 0 | 2 cycles
 	ret
-
-; String to be converted to Morse code.
-; Should be all caps and only supports letters A-Z and spaces
-string:
-    .db "THIS IS A TEST MESSAGE", 0
 
 ; First element is the binary encoded sequence for the coresponding letter (starting at the leftmost bit)
 ;	0: Dot
