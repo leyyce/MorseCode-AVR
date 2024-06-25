@@ -5,6 +5,8 @@
 ; Author : Leya Wehner
 ;
 
+.equ BUFFER_SIZE = 255  ; Size of the buffer
+
 ; Define the port register the transmitter is connected to
 .equ TRANSMITTER_PORT = PORTD
 ; Defines the data direction register the transmitter is connected to
@@ -30,16 +32,17 @@
 .equ WORD_SPACE_CYCLES = (WORD_SPACE / 1000.) / (1. / clk_frequency_in_Hz) / 11
 
 ; More meaningful names for registers
-.def CHAR = r16
-.def MORSE_CODE = r17
-.def CODE_LEN= r18
-.def BITMASK = r19
-.def TEMP = r20
+.def BUF_INDEX = r16
+.def CHAR = r17
+.def MORSE_CODE = r18
+.def CODE_LEN= r19
+.def BITMASK = r20
+.def TEMP = r21
 
-.def CNT_LOW = r21
-.def CNT_MID = r22
-.def CNT_HIGH = r23
-.def ZERO_CHECK = r24
+.def CNT_LOW = r22
+.def CNT_MID = r23
+.def CNT_HIGH = r24
+.def ZERO_CHECK = r25
 
 ; Macro that loads the curently needed clock cycle count into the coresponding register
 ; Params:
@@ -100,26 +103,122 @@ init:
 	init_uart
 	; Configure LED pin as output
 	sbi TRANSMITTER_DDR, TRANSMITTER_PIN
+	clr BUF_INDEX
 main_loop:
-	lds TEMP, UCSR0A
-	andi TEMP, (1 << RXC0)
-	tst TEMP
-	breq main_loop
-	lds CHAR, UDR0
+	rcall send_acknowledge
+	rcall read_to_buffer
 
-	cpi CHAR, 32 ; Check if char is space
-	brne handle_char
+	ldi ZL, LOW(buffer_start)
+	ldi ZH, HIGH(buffer_start)
+
+	blink_loop:
+		ld CHAR, Z+ ; Load next char in CHAR register and post increment Z to yield the subsequent char on the next iteration
+		
+		cpi CHAR, 0 ; Test if CHAR is zero...
+		breq main_loop ; ...and if so end of string is reached and we branch accordingly
+		
+		cpi CHAR, 13
+		breq main_loop
 	
-	; Case char is space
-	space_word
-	rjmp main_loop
+		cpi CHAR, ' ' ; Check if char is space
+		brne handle_char
+	
+		; Case char is space
+		space_word
+		rjmp blink_loop
 
-	; Case char is a normal character
-	handle_char:
-		rcall map_char_to_morse
-		rcall transmit_code
-		space_letter
-		rjmp main_loop
+		; Case char is a normal character
+		handle_char:
+			rcall map_char_to_morse
+			rcall transmit_code
+			space_letter
+			rjmp blink_loop
+
+read_to_buffer:
+	push TEMP
+	in TEMP, SREG
+	push TEMP
+	push ZL
+	push ZH
+	push CHAR
+	push BUF_INDEX
+	push ZERO_CHECK
+
+	clr ZERO_CHECK
+
+	wait_for_data:
+		lds TEMP, UCSR0A
+		sbrs TEMP, RXC0
+		rjmp wait_for_data
+
+	lds CHAR, UDR0
+	
+	ldi ZL, LOW(buffer_start)
+	ldi ZH, HIGH(buffer_start)
+	add ZL, BUF_INDEX
+	adc ZH, ZERO_CHECK ; Add carry from low byte addition
+	st Z, CHAR
+	
+	cpi CHAR, 0
+	breq end_read
+
+	cpi CHAR, 13
+	breq end_read
+
+	; Increment buffer index
+	inc BUF_INDEX
+
+	; Check for buffer overflow
+	cpi BUF_INDEX, BUFFER_SIZE
+	brlo wait_for_data      ; If not overflowed, continue receiving
+	
+	; Handle buffer overflow (reset index)
+	ldi buf_index, 0
+	rjmp wait_for_data
+
+	end_read:
+		pop ZERO_CHECK
+		pop BUF_INDEX
+		pop CHAR
+		pop ZH
+		pop ZL
+		pop TEMP
+		out SREG, TEMP
+		pop TEMP
+		ret
+
+send_acknowledge:
+	push TEMP
+	in TEMP, SREG
+	push TEMP
+	push CHAR
+	push ZL
+	push ZH
+
+	ldi ZL, LOW(ack_msg << 1)
+	ldi ZH, HIGH(ack_msg << 1)
+
+	ack_next_char:
+		lpm CHAR, Z+ ; Load next char in CHAR register and post increment Z to yield the subsequent char on the next iteration
+		tst CHAR ; Test if CHAR is zero or negative...
+		breq end_ack ; ...and if so end of string is reached and we branch accordingly
+
+		wait_for_udre:
+			lds TEMP, UCSR0A
+			sbrs TEMP, UDRE0
+			rjmp WAIT_FOR_UDRE
+
+		sts UDR0 , CHAR
+		rjmp ack_next_char
+
+	end_ack:
+		pop ZH
+		pop ZL
+		pop CHAR
+		pop TEMP
+		out SREG, TEMP
+		pop TEMP
+		ret
 
 transmit_code:
 	push TEMP
@@ -216,6 +315,9 @@ delay:
 	brne delay ; continue when cnt_high != 0 | 2 cycles
 	ret
 
+ack_msg:
+    .db "OK!", 13, 10, 0
+
 ; First element is the binary encoded sequence for the coresponding letter (starting at the leftmost bit)
 ;	0: Dot
 ;	1: Dash
@@ -247,3 +349,7 @@ morse_table:
 	.db 0b10010000, 4 ; X:	-..-
 	.db 0b10110000, 4 ; Y:	-.--
 	.db 0b11000000, 4 ; Z:	--..
+
+.dseg
+buffer_start:
+    .byte BUFFER_SIZE   ; Define buffer in SRAM
