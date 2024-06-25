@@ -152,12 +152,21 @@ read_to_buffer:
 		rjmp wait_for_data
 
 	lds CHAR, UDR0
+
+	cpi CHAR, 8
+	breq handle_backspace
+
+	cpi CHAR, 127
+	breq handle_backspace
 	
 	ldi ZL, LOW(buffer_start)
 	ldi ZH, HIGH(buffer_start)
 	add ZL, BUF_INDEX
 	adc ZH, ZERO_CHECK ; Add carry from low byte addition
 	st Z, CHAR
+
+	rcall wait_for_udre
+	sts UDR0 , CHAR
 	
 	cpi CHAR, 0
 	breq end_read
@@ -173,10 +182,28 @@ read_to_buffer:
 	brlo wait_for_data      ; If not overflowed, continue receiving
 	
 	; Handle buffer overflow (reset index)
-	ldi buf_index, 0
+	clr buf_index
 	rjmp wait_for_data
 
+	handle_backspace:
+		cpi buf_index, 0
+		breq send_backspace
+		dec buf_index
+		rjmp send_backspace
+
+	send_backspace:
+		rcall wait_for_udre
+		sts UDR0 , CHAR
+		rjmp wait_for_data
+
 	end_read:
+		rcall wait_for_udre
+		ldi TEMP, 13
+		sts UDR0, TEMP
+		rcall wait_for_udre
+		ldi TEMP, 10
+		sts UDR0, TEMP
+
 		pop ZERO_CHECK
 		pop BUF_INDEX
 		pop CHAR
@@ -203,11 +230,7 @@ send_acknowledge:
 		tst CHAR ; Test if CHAR is zero or negative...
 		breq end_ack ; ...and if so end of string is reached and we branch accordingly
 
-		wait_for_udre:
-			lds TEMP, UCSR0A
-			sbrs TEMP, UDRE0
-			rjmp WAIT_FOR_UDRE
-
+		rcall wait_for_udre
 		sts UDR0 , CHAR
 		rjmp ack_next_char
 
@@ -297,6 +320,21 @@ map_char_to_morse:
 	pop ZH
 	pop ZL
 	
+	ret
+
+wait_for_udre:
+	push TEMP
+	in TEMP, SREG
+	push TEMP
+
+	udre_loop:
+		lds TEMP, UCSR0A
+		sbrs TEMP, UDRE0
+		rjmp udre_loop
+
+	pop TEMP
+	out SREG, TEMP
+	pop TEMP
 	ret
 
 delay:
