@@ -3,6 +3,7 @@
 ;
 ; Created: 11/06/2024 17:57:39
 ; Author : Leya Wehner
+; Group : K
 ;
 
 ; Size of the recive buffer for data send over UART
