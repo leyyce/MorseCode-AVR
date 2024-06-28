@@ -27,11 +27,11 @@
 .equ WORD_SPACE = 7 * DOT_TIME ; Space between words
 
 ; Define amount of clock cycles to yield the desired wait times
-.equ DOT_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / DOT_TIME) / 11
-.equ DASH_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / DASH_TIME) / 11
-.equ CHAR_SPACE_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / CHAR_SPACE) / 11
-.equ LETTER_SPACE_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / LETTER_SPACE) / 11
-.equ WORD_SPACE_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / WORD_SPACE) / 11
+.equ DOT_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / DOT_TIME) / 10
+.equ DASH_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / DASH_TIME) / 10
+.equ CHAR_SPACE_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / CHAR_SPACE) / 10
+.equ LETTER_SPACE_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / LETTER_SPACE) / 10
+.equ WORD_SPACE_CYCLES = CLK_FREQUENCY_IN_HZ / (1000. / WORD_SPACE) / 10
 
 ; More meaningful names for registers
 .def BUF_INDEX = r16
@@ -135,9 +135,7 @@ main_loop:
 			space_letter
 			rjmp blink_loop
 
-; Function that reads the UART input into a memory buffer as pointed to by Z, and echos recived characters back to the terminal
-; Params:
-;	Z: Pointer to the start of the memory buffer. Buffer must be able to hold at least BUFFER_SIZE bytes. Otherwise overflow protection can't be guaranteed.
+; Function that reads the UART input into a memory buffer located at the buffer_start address, and echos recived characters back to the terminal
 read_to_buffer:
 	push TEMP
 	in TEMP, SREG
@@ -193,7 +191,6 @@ read_to_buffer:
 		cpi buf_index, 0
 		breq echo_backspace
 		dec buf_index
-		rjmp echo_backspace
 
 	echo_backspace:
 		rcall wait_for_udre
@@ -248,6 +245,10 @@ send_acknowledge:
 		pop TEMP
 		ret
 
+; Transmits the morse code sequence over the GPIO as defined in TRANSMITTER_PORT and TRANSMITTER_DDR
+; Params:
+;	MORSE_CODE: The morse code sequence to transmit
+;	CODE_LEN: The lenght of the morse code to transmit
 transmit_code:
 	push TEMP
 	in TEMP, SREG
@@ -267,18 +268,18 @@ transmit_code:
 
 	dot:
 		transmit_dot
-		rjmp skip_dash
+		rjmp prepare_next
 
 	dash:
 		transmit_dash
 	
-	skip_dash:
-		lsr BITMASK ; Shift BITMASK to the right to look at the next bit in the subsequent iteration
-
+	prepare_next:
 		; Check if the next bit in the MORSE_CODE register is still part of the Morse code
 		dec CODE_LEN ; Decrement CODE_LEN
 		tst CODE_LEN ; Check CODE_LEN for zero
 		breq end_transmit ; Jump to end if all the bits that were part of the code are transmited
+
+		lsr BITMASK ; Shift BITMASK to the right to look at the next bit in the subsequent iteration
 
 		space_char
 		rjmp morse_loop
@@ -292,6 +293,12 @@ transmit_code:
 		pop TEMP
 		ret
 
+; Maps a given character to it's coresponding morse code sequence
+; Params:
+;	CHAR: The char that should be mapped to morse code
+; Returns:
+;	MORSE_CODE: The morse code sequence representing the given char
+;	CODE_LEN: The lenght of the morse code frequence
 map_char_to_morse:
 	push ZL
 	push ZH
@@ -342,7 +349,6 @@ wait_for_udre:
 
 delay:
 	; decrement counter :
-	clc ; clear carry | 1 cycle
 	subi CNT_LOW, 1 ; subtract low byte | 1 cycle
 	sbci CNT_MID, 0 ; subtract mid byte | 1 cycle
 	sbci CNT_HIGH, 0 ; subtract high byte | 1 cycle
