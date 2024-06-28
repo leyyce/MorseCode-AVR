@@ -90,7 +90,7 @@
 .endmacro
 
 .macro init_uart
-	ldi TEMP, 207 ; 103 with TXEN0 unset
+	ldi TEMP, 207 ; 103 with U2X0 unset
 	sts UBRR0L, TEMP
 	clr TEMP
 	sts UBRR0H, TEMP
